@@ -158,9 +158,12 @@ function contextNodes(text, ranges) {
   const parts = []
   let cursor = a
   for (const [s, e] of ranges) {
+    // s >= b: range ENTIRELY past the window — without this guard it would
+    // paint an unmarked tail stretching past b and a stray empty <mark>.
+    if (e <= a || s >= b) continue // outside the window
     const ms = Math.max(s, a)
     const me = Math.min(e, b)
-    if (e <= a || me <= cursor) continue // outside the window / already covered
+    if (me <= cursor) continue // already covered
     if (cursor < ms) parts.push(document.createTextNode(text.slice(cursor, ms)))
     const mark = document.createElement('mark')
     mark.textContent = text.slice(ms, me)
