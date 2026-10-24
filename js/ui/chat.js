@@ -21,6 +21,12 @@
 // math in this module (windowFor, anchor, jump, restore, rest position)
 // therefore runs on ABS scrollTop, never on the raw element scrollTop.
 //
+// Per-frame cost stays small even for a 40MB / 800k-message chat: window.js
+// keeps a chunk-sum engine over the heights vector (O(n/512) lookups, no
+// per-frame O(n) work, no per-frame copying) — without it, deep scrolling on
+// a phone scanned ~800k rows several times per frame and stalled with a blank
+// pool (regression-probed in tests/huge-scroll.test.js).
+//
 // Navigation contract (module-level mini-router, no routing lib):
 //   showChat() / showHome()  — flip the [hidden] attributes of #home / #chat.
 //   openChat(fileName, store, opts) -> Promise<{ close(), highlightMessage }>
@@ -65,8 +71,10 @@ const searchBtn = document.getElementById('chat-search-btn')
 // restored scroll lands EXACTLY where the reader left off (uncached heights
 // fall back to estimate-based restore, which re-pins within a tolerance).
 // A reimported file with a different shape (count or last message changed)
-// drops the cache and re-converges. Heights vectors are treated as immutable
-// (remapMany returns fresh arrays), so sharing them with the cache is safe.
+// drops the cache and re-converges. Heights vectors are shared with the cache
+// on PURPOSE and mutate in place through remapMany (window.js's engine keeps
+// its chunk-sum totals exact on every update — nothing else may write into
+// the vector): each session continues converging the vector the cache holds.
 const scrollPositions = new Map()
 const heightCache = new Map()
 
@@ -343,17 +351,23 @@ function runFrame() {
     // everything the reader sees by its delta, so add Σ(new−old) for those
     // indices back to scrollTop. The anchor row itself and anything below
     // only move content beneath the reading line — no compensation needed.
+    // The anchor is step-1's window `first` — identical convention to
+    // windowFor's own first-intersecting-item walk, computed against the
+    // pre-remeasure vector, at no extra scan cost.
     // scrollTop == 0 pins the top of the chat (anchor is row 0 → empty sum;
     // we also skip outright) so the compensation never fights the reader there.
-    const anchor = anchorIndex(previous, scrollTop)
-    s.lengths = remapMany({ lengths: previous, updates }).lengths
+    // NOTE: shifts read OLD heights before remapMany — on huge chats the remap
+    // batch mutates the vector in place (engine-backed, zero-copy), so the
+    // snapshot must be consumed first.
+    const anchor = win.first ?? -1
+    let shift = 0
     if (anchor > 0) {
-      let shift = 0
       for (const u of updates) {
         if (u.itemIndex < anchor) shift += u.newHeight - previous[u.itemIndex]
       }
-      scrollTop += shift // ABS: setScrollState re-derives virtual/physical below
     }
+    s.lengths = remapMany({ lengths: previous, updates }).lengths
+    if (shift !== 0) scrollTop += shift // ABS: setScrollState re-derives virtual/physical below
     win = windowFor({ lengths: s.lengths, scrollTop, viewport })
     reconcile(s, win)
   }
@@ -474,20 +488,6 @@ function measurePool(lengths) {
     if (h !== lengths[i]) updates.push({ itemIndex: i, newHeight: h })
   }
   return updates
-}
-
-// First item whose span intersects the viewport's top edge — the same
-// convention windowFor uses internally for its `first` visible item (kept
-// local rather than widening the pure math module's surface). Items with a
-// correction at an index below this are above the reader's anchor line.
-// Returns -1 when the scroll position is past all content (no visible row).
-function anchorIndex(lengths, scrollTop) {
-  let cum = 0
-  for (let i = 0; i < lengths.length; i++) {
-    if (cum + lengths[i] > scrollTop) return i
-    cum += lengths[i]
-  }
-  return -1
 }
 
 // ---- Scroll + pads ----------------------------------------------------------
