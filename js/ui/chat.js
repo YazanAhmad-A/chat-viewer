@@ -215,7 +215,7 @@ function beginSession(fileName, conv, opts) {
   // lands in one shot (the rAF pass right after fixes the estimates).
   const win = windowFor({ lengths: heights, scrollTop: startTop, viewport: scrollEl.clientHeight })
   reconcile(s, win)
-  setPads(win.start, win.end, heights)
+  setPads(win)
   scrollEl.offsetHeight // force layout so scrollTop clamps against the fresh pads
   scrollEl.scrollTop = startTop
   scheduleFrame()
@@ -291,7 +291,7 @@ function runFrame() {
   const s = session
   if (!s || s.detached) return
   const viewport = scrollEl.clientHeight
-  let scrollTop = scrollEl.scrollTop // may be re-read after compensation below
+  let scrollTop = scrollEl.scrollTop
 
   // 1. Window under the height estimates as they stand, then reconcile DOM.
   let win = windowFor({ lengths: s.lengths, scrollTop, viewport })
@@ -300,6 +300,13 @@ function runFrame() {
   // 2. Measure what is mounted; fold the whole frame's corrections into
   //    ONE remapMany call (a single copy of the heights vector per frame).
   const updates = measurePool(s.lengths)
+
+  // 3. NOTHING changed after step 1 (no remeasures, no compensation — the
+  //    steady reading state, by far the most common frame) → step 1's window
+  //    is still exact against the same lengths and the same scrollTop, so
+  //    the second windowFor pass is skipped entirely. Otherwise recompute
+  //    against the corrected vector AND the compensated scroll position, so
+  //    padTop/padBottom never disagree with what is rendered.
   if (updates.length > 0) {
     const previous = s.lengths
     // Scroll compensation (we set overflow-anchor:none on #chat-scroll, so
@@ -322,14 +329,10 @@ function runFrame() {
         scrollTop = scrollEl.scrollTop // read back: the browser may clamp
       }
     }
+    win = windowFor({ lengths: s.lengths, scrollTop, viewport })
+    reconcile(s, win)
   }
-
-  // 3. Heights changed → recompute the window once against the corrected
-  //    vector AND the compensated scroll position, so padTop/padBottom never
-  //    disagree with what is rendered.
-  win = windowFor({ lengths: s.lengths, scrollTop, viewport })
-  reconcile(s, win)
-  setPads(win.start, win.end, s.lengths)
+  setPads(win)
 
   // 4. One-time post-first-paint work: queued highlight, scroll re-pin.
   if (!s.settled) settle(s)
@@ -462,17 +465,15 @@ function anchorIndex(lengths, scrollTop) {
 
 // ---- Pads -------------------------------------------------------------------
 
-// padTop = exact sum of heights of items before [start), padBottom of items
-// from [end) on — so unmounting items at an edge while their height moves
-// into the pad happens in the same layout commit: the content below/above
-// never shifts.
-function setPads(start, end, lengths) {
-  let top = 0
-  for (let i = 0; i < start; i++) top += lengths[i]
-  let bottom = 0
-  for (let i = end; i < lengths.length; i++) bottom += lengths[i]
-  padTopEl.style.height = top + 'px'
-  padBottomEl.style.height = bottom + 'px'
+// padTop = sum of heights of items before [start), padBottom of items from
+// [end) on — so unmounting items at an edge while their height moves into
+// the pad happens in the same layout commit: the content below/above never
+// shifts. windowFor already computed both sums during its cum pass, so the
+// pads are read from the window result directly (no second O(n) scan of
+// lengths here — perf ruling #3).
+function setPads(win) {
+  padTopEl.style.height = win.padTop + 'px'
+  padBottomEl.style.height = win.padBottom + 'px'
 }
 
 function cumulative(lengths, i) {
