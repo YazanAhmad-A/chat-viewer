@@ -18,6 +18,13 @@ body {
   flex-direction: column;
 }
 
+/* Author styles on .screen (display:flex) would otherwise override the UA's
+   [hidden] rule and leave the hidden chat section blanking the home screen.
+   Re-assert hiding authoritatively. */
+[hidden] {
+  display: none !important;
+}
+
 .home-header {
   position: sticky;
   top: 0;
@@ -124,4 +131,131 @@ body {
   background: #202c33;
   color: #ffc861;
   font-size: 0.85rem;
+}
+
+/* ---- Chat screen ---- */
+
+/* A fixed-height phone-first screen: header on top, messages scroll below.
+   dvh instead of vh so mobile URL-bar show/hide doesn't overshoot; the vh
+   line is the fallback for older engines. min-height:0 cancels .screen's
+   100vh so the chat never starts a page scroll. */
+.chat-screen {
+  min-height: 0;
+  height: 100vh;
+  height: 100dvh;
+}
+
+.chat-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem;
+  background: #202c33;
+}
+
+.chat-btn {
+  flex-shrink: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #e9edef;
+  font-size: 1.1rem;
+  cursor: pointer;
+}
+
+.chat-btn:hover {
+  background: #111b21;
+}
+
+.chat-spacer {
+  flex: 1;
+}
+
+.chat-body {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+}
+
+/* The ONE scroll container (#chat-scroll fills .chat-body exactly).
+   overflow-anchor off: the virtualizer adjusts its own pads and scroll
+   position; the browser's scroll anchoring would fight it with a second,
+   competing compensation. overscroll-behavior stays unset on purpose —
+   the container must scroll naturally. */
+.chat-scroll {
+  position: absolute;
+  inset: 0;
+  overflow-y: auto;
+  overflow-anchor: none;
+  background: #0b141a;
+}
+
+.chat-pad {
+  width: 100%;
+}
+
+/* Bubble row = measurement unit (padding, not margins, so its border-box
+   height is the whole gap): 2px above, 8px below a bubble. width:fit-content
+   + one auto margin gives the WhatsApp sides; max-width keeps ~1000-char
+   messages wrapping instead of widening the container. Physical left/right
+   margins work identically under dir="rtl". */
+.msg {
+  width: fit-content;
+  max-width: 78%;
+  padding: 2px 0.75rem 8px;
+}
+
+/* Own side: sender of the last message — green, pushed to the visual right
+   (in RTL the page's start side), tail corner border-start-end. */
+.msg.own {
+  margin-left: auto;
+}
+
+/* Other side: dark, pushed to the visual left, mirrored tail corner. */
+.msg.other {
+  margin-right: auto;
+}
+
+.bubble {
+  background: #202c33;
+  border-radius: 12px;
+  padding: 0.3rem 0.6rem 0.35rem;
+}
+
+.msg.own .bubble {
+  background: #005c4b;
+  border-start-end-radius: 2px;
+}
+
+.msg.other .bubble {
+  border-start-start-radius: 2px;
+}
+
+.msg-name {
+  color: #53bdeb;
+  font-size: 0.8rem;
+  margin-bottom: 2px;
+}
+
+/* pre-wrap honors the export's newlines; overflow-wrap:anywhere forces
+   unbroken 1000-char strings to wrap; dir="auto" (set in JS on the node)
+   lets inline English pick its own bidi paragraph direction. */
+.msg-text {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.95rem;
+  line-height: 1.4;
+}
+
+/* Search-jump ping (Task 9): outline only, never shifts layout or the
+   virtualizer's measured heights. */
+.msg-highlight {
+  outline: 2px solid #ff8a00;
+  outline-offset: 1px;
 }

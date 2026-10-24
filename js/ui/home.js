@@ -7,6 +7,7 @@
 
 import { importFile } from '../import.js'
 import { requestPersistence } from '../store.js'
+import { openChat } from './chat.js'
 
 const PREVIEW_MAX = 80
 
@@ -187,6 +188,20 @@ export async function initHome(store) {
       longPressTimer = null
     })
   }
+
+  // Row tap → open that conversation (windowed renderer, js/ui/chat.js).
+  // Navigation stays minimal: chat.js flips #home/#chat visibility itself,
+  // onBack is just a home re-render so the list refreshes on return.
+  // The suppressContextUntil window (set when a long-press delete confirms)
+  // also swallows the synthetic click that follows a raised long-press, so a
+  // delete confirm can't accidentally open the chat.
+  els.list.addEventListener('click', (event) => {
+    if (Date.now() < suppressContextUntil) return
+    const row = rowFor(event.target)
+    if (!row) return
+    openChat(row.dataset.file, store, { onBack: () => render() })
+      .catch((err) => toast(err.message ?? String(err)))
+  })
 
   els.addBtn.addEventListener('click', () => els.fileInput.click())
   els.fileInput.addEventListener('change', async () => {
