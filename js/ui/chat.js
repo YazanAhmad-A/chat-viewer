@@ -4,6 +4,9 @@
 // as a uniform 64px estimate (js/window.js math) and converge on reality
 // because every mounted bubble is measured in the same rAF frame that laid
 // it out, with corrections folded back via ONE remapMany call per frame.
+// overflow-anchor is disabled, so the frame also compensates the scroll for
+// corrections above the viewport's top edge (see runFrame) — nothing the
+// reader sees moves when first-seen rows prove taller or shorter than 64px.
 //
 // Navigation contract (module-level mini-router, no routing lib):
 //   showChat() / showHome()  — flip the [hidden] attributes of #home / #chat.
@@ -271,7 +274,7 @@ function runFrame() {
   const s = session
   if (!s || s.detached) return
   const viewport = scrollEl.clientHeight
-  const scrollTop = scrollEl.scrollTop
+  let scrollTop = scrollEl.scrollTop // may be re-read after compensation below
 
   // 1. Window under the height estimates as they stand, then reconcile DOM.
   let win = windowFor({ lengths: s.lengths, scrollTop, viewport })
@@ -280,10 +283,33 @@ function runFrame() {
   // 2. Measure what is mounted; fold the whole frame's corrections into
   //    ONE remapMany call (a single copy of the heights vector per frame).
   const updates = measurePool(s.lengths)
-  if (updates.length > 0) s.lengths = remapMany({ lengths: s.lengths, updates }).lengths
+  if (updates.length > 0) {
+    const previous = s.lengths
+    // Scroll compensation (we set overflow-anchor:none on #chat-scroll, so
+    // the browser's scroll anchoring is off and WE own it): a correction to
+    // a row strictly above the row under the viewport's top edge shifts
+    // everything the reader sees by its delta, so add Σ(new−old) for those
+    // indices back to scrollTop. The anchor row itself and anything below
+    // only move content beneath the reading line — no compensation needed.
+    // scrollTop == 0 pins the top of the chat (anchor is row 0 → empty sum;
+    // we also skip outright) so the compensation never fights the reader there.
+    const anchor = anchorIndex(previous, scrollTop)
+    s.lengths = remapMany({ lengths: previous, updates }).lengths
+    if (anchor > 0) {
+      let shift = 0
+      for (const u of updates) {
+        if (u.itemIndex < anchor) shift += u.newHeight - previous[u.itemIndex]
+      }
+      if (shift !== 0) {
+        scrollEl.scrollTop += shift
+        scrollTop = scrollEl.scrollTop // read back: the browser may clamp
+      }
+    }
+  }
 
   // 3. Heights changed → recompute the window once against the corrected
-  //    vector, so padTop/padBottom never disagree with what is rendered.
+  //    vector AND the compensated scroll position, so padTop/padBottom never
+  //    disagree with what is rendered.
   win = windowFor({ lengths: s.lengths, scrollTop, viewport })
   reconcile(s, win)
   setPads(win.start, win.end, s.lengths)
@@ -401,6 +427,20 @@ function measurePool(lengths) {
     if (h !== lengths[i]) updates.push({ itemIndex: i, newHeight: h })
   }
   return updates
+}
+
+// First item whose span intersects the viewport's top edge — the same
+// convention windowFor uses internally for its `first` visible item (kept
+// local rather than widening the pure math module's surface). Items with a
+// correction at an index below this are above the reader's anchor line.
+// Returns -1 when the scroll position is past all content (no visible row).
+function anchorIndex(lengths, scrollTop) {
+  let cum = 0
+  for (let i = 0; i < lengths.length; i++) {
+    if (cum + lengths[i] > scrollTop) return i
+    cum += lengths[i]
+  }
+  return -1
 }
 
 // ---- Pads -------------------------------------------------------------------
