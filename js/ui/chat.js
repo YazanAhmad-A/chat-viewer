@@ -16,13 +16,15 @@
 //     opts.initialIndex: optional message index to land on instead of the
 //     saved scroll position (used by a reader that already knows a target).
 //
-// Task 9 seam: the search overlay (to be built) will call
-// handle.highlightMessage(messageIndex) — scrolls to that bubble, measures
-// its real position, then outlines it #ff8a00 for 2s. highlightMessage calls
-// made while the chat hasn't finished settling are queued and applied on the
-// first settled frame. The header search button itself is reserved (no-op).
+// Task 9 seam: the search overlay (js/ui/search.js) reads the conversation
+// via the module-local session and calls handle.highlightMessage /
+// requestHighlight — scrolls to that bubble, measures its real position,
+// then outlines it #ff8a00 for 2s. highlightMessage calls made while the
+// chat hasn't finished settling are queued and applied on the first settled
+// frame. The header search button opens the overlay.
 
 import { initWindowCalc, windowFor, remapMany } from '../window.js'
+import { initSearch } from './search.js'
 
 const AVG_HEIGHT = 64        // initial per-message estimate, plan-pinned
 const MAX_GROW_STEP = 64     // rows mounted incrementally per frame before a hard reset
@@ -54,6 +56,7 @@ let session = null
 let openSeq = 0
 let rafId = 0
 let wired = false
+let searchOverlay = null // set once in wire(); fallback for pre-wire clicks
 
 // Handle for a superseded openChat call (two rapid row taps): harmless
 // no-ops rather than null, so callers never deref-guard.
@@ -68,11 +71,21 @@ function wire() {
 
   backBtn.addEventListener('click', () => closeSession())
 
-  // SEARCH BUTTON — Task 9 seam. The search overlay will listen on this
-  // button from its own module and render its sheet inside #chat-body
-  // (absolute overlay; the chat behind stays mounted and keeps its scroll).
-  // Deliberate no-op until then.
-  searchBtn.addEventListener('click', () => {})
+  // SEARCH BUTTON — opens the search overlay (js/ui/search.js). The overlay
+  // reads the conversation through THIS module's live session instead of
+  // re-fetching from the store (a mid-search re-import could race a fetch);
+  // highlightMessage is requestHighlight itself, which no-ops once the
+  // session is detached — see the seam comment atop js/ui/search.js.
+  searchOverlay = initSearch(() => {
+    const s = session
+    if (!s || s.detached) return null
+    return {
+      fileName: s.fileName,
+      messages: s.conv.messages,
+      highlightMessage: requestHighlight,
+    }
+  })
+  searchBtn.addEventListener('click', () => searchOverlay?.open())
 
   scrollEl.addEventListener('scroll', scheduleFrame, { passive: true })
   window.addEventListener('resize', scheduleFrame)
@@ -140,6 +153,10 @@ function releaseSession() {
   if (!s) return
   s.detached = true
   session = null
+  // The sheet lives inside #chat; a chat close must drop its context
+  // snapshot so the overlay can never outlive the conversation it searched
+  // (closing hides it; reopening any chat starts with a clean sheet).
+  searchOverlay?.close()
   if (rafId !== 0) { cancelAnimationFrame(rafId); rafId = 0 }
   clearTimeout(s.highlightTimer)
   scrollPositions.set(s.fileName, scrollEl.scrollTop)

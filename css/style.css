@@ -259,3 +259,111 @@ body {
   outline: 2px solid #ff8a00;
   outline-offset: 1px;
 }
+
+/* ---- Search overlay (Task 9) ---- */
+
+/* Anchor for the absolutely-positioned sheet: it covers the ENTIRE chat
+   screen (header included) so the real back button can't close the chat
+   while the sheet is up. The chat and its scroll position remain mounted
+   underneath — the sheet only paints over them. */
+.chat-screen {
+  position: relative;
+}
+
+.search-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: flex;
+  flex-direction: column;
+  background: #0b141a;
+}
+
+/* Input row pinned to the top of the sheet: flex column with a fixed header
+   and a scrolling list needs no sticky positioning. Matches the chat header
+   rhythm (padding, gap, .chat-btn row height). */
+.search-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  padding: 0.4rem 0.5rem;
+  background: #202c33;
+}
+
+.search-input {
+  flex: 1;
+  min-width: 0;
+  padding: 0.4rem 0.9rem;
+  border: 0;
+  border-radius: 999px;
+  background: #111b21;
+  color: #e9edef;
+  font: inherit;
+  font-size: 0.95rem;
+}
+
+.search-input::placeholder {
+  color: #8696a0;
+}
+
+.search-input:focus {
+  outline: 2px solid #53bdeb;
+}
+
+.search-count {
+  flex-shrink: 0;
+  padding: 0.35rem 1rem;
+  border-bottom: 1px solid #111b21;
+  background: #111b21;
+  color: #8696a0;
+  font-size: 0.8rem;
+}
+
+/* The sheet's own scroll list; contain keeps its momentum from chaining into
+   the (hidden) chat scroll behind the sheet. */
+.search-results {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.search-row {
+  padding: 0.5rem 1rem;
+  border-bottom: 1px solid #111b21;
+  cursor: pointer;
+}
+
+.search-row:hover {
+  background: #111b21;
+}
+
+.search-row-name {
+  color: #53bdeb;
+  font-size: 0.8rem;
+  margin-bottom: 2px;
+}
+
+/* dir="auto" on this node (set in js/ui/search.js) lets the context slice
+   pick its own direction like chat.js's bubbles; wrapping (not ellipsis)
+   keeps the marked hit fully visible. */
+.search-row-text {
+  color: #e9edef;
+  font-size: 0.9rem;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.search-row-text mark {
+  background: #f5c518;
+  color: #111;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+.search-hint {
+  padding: 1.25rem 1rem;
+  color: #8696a0;
+  text-align: center;
+}
