@@ -51,8 +51,21 @@ export function windowFor({ lengths, scrollTop, viewport }, overscan = 8) {
   return { start, end, padTop: cum[start], padBottom: cum[n] - cum[end] }
 }
 
-export function remap({ lengths, itemIndex, newHeight }) {
+// Applies ALL height updates in ONE pass through lengths — a single O(n)
+// slice shared by the whole batch, plus O(k) assignments. Task 8 calls this
+// once per frame-batch of remeasures instead of one remap per message.
+export function remapMany({ lengths, updates }) {
   const next = lengths.slice() // pure: caller pipes the returned lengths onward
-  if (itemIndex >= 0 && itemIndex < next.length) next[itemIndex] = newHeight
+  if (updates) {
+    for (const { itemIndex, newHeight } of updates) {
+      if (itemIndex >= 0 && itemIndex < next.length) next[itemIndex] = newHeight
+    }
+  }
   return { lengths: next }
+}
+
+// Thin wrapper over remapMany (single update) — keeps the plan's pinned
+// contract working; prefer remapMany when batching reveals.
+export function remap({ lengths, itemIndex, newHeight }) {
+  return remapMany({ lengths, updates: [{ itemIndex, newHeight }] })
 }

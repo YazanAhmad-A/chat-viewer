@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { initWindowCalc, windowFor, remap } from '../js/window.js'
+import { initWindowCalc, windowFor, remap, remapMany } from '../js/window.js'
 
 // 10 items x avg 100, viewport 400, scrollTop 350, overscan 1 — the brief's pinned case
 test('initWindowCalc seeds uniform estimates', () => {
@@ -40,6 +40,29 @@ test('end never points past lengths.length (clamped)', () => {
 
 test('remap replaces the estimate; derived sum ripples', () => {
   const { lengths } = remap({ lengths: Array(10).fill(100), itemIndex: 3, newHeight: 250 })
+  assert.equal(lengths[3], 250)
+  assert.equal(lengths.reduce((a, b) => a + b, 0), 1150)
+})
+
+// Batch remeasure: 10x100 base; updates {0->120, 3->250, 9->50} replace three
+// 100s, so the derived sum is provable: 1000 - 300 + 120 + 250 + 50 = 1120.
+// One pass through lengths for the whole batch (one slice total, not per update).
+test('remapMany applies a batch of updates in one pass; sum provable', () => {
+  const input = Array(10).fill(100)
+  const { lengths } = remapMany({
+    lengths: input,
+    updates: [{ itemIndex: 0, newHeight: 120 }, { itemIndex: 3, newHeight: 250 }, { itemIndex: 9, newHeight: 50 }],
+  })
+  assert.deepEqual(lengths, [120, 100, 100, 250, 100, 100, 100, 100, 100, 50])
+  assert.equal(lengths.reduce((a, b) => a + b, 0), 1120)
+  assert.deepEqual(input, Array(10).fill(100)) // pure: input untouched
+})
+
+test('remapMany with a single update matches the pinned 10x100/3->250 => 1150 case', () => {
+  const { lengths } = remapMany({
+    lengths: Array(10).fill(100),
+    updates: [{ itemIndex: 3, newHeight: 250 }],
+  })
   assert.equal(lengths[3], 250)
   assert.equal(lengths.reduce((a, b) => a + b, 0), 1150)
 })
