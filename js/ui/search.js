@@ -62,7 +62,7 @@ export function initSearch(getter) {
 function open() {
   context = typeof getOpenChatHandle === 'function' ? getOpenChatHandle() : null
   if (!context) return // defensive: the button lives in the chat header, so a chat is always open here
-  reset()
+  resetUi()
   overlay.hidden = false
   // preventScroll: focusing must not move the chat's scroll position behind.
   input.focus({ preventScroll: true })
@@ -70,11 +70,16 @@ function open() {
 
 function close() {
   overlay.hidden = true
-  reset()
+  resetUi()
+  context = null
 }
 
-function reset() {
-  context = null
+// Clears the overlay's UI state (input/results/count/timer) WITHOUT touching
+// the conversation context — open() calls this afterSnapshot so typing can
+// search; close() additionally nulls `context` above.
+// Regression note: when reset() also owned `context = null`, open() wiped the
+// snapshot it had just taken and every search tick early-returned empty.
+function resetUi() {
   input.value = ''
   clearTimeout(debounceTimer)
   debounceTimer = 0
