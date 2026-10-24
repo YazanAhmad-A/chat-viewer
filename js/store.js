@@ -13,20 +13,28 @@ const DB_VERSION = 1
 
 // Promise wrapper for an IDBRequest. A missing key resolves undefined —
 // IndexedDB fires onsuccess with result undefined, never an error.
-function request(request) {
+function request(request, op) {
   return new Promise((resolve, reject) => {
     request.onsuccess = (event) => resolve(event.target.result)
-    request.onerror = (event) => reject(event.target.error)
+    request.onerror = (event) => reject(rejection(op, event.target.error))
   })
 }
 
 // Promise wrapper for a transaction: a write is only durable at oncomplete,
 // not at any individual request's onsuccess.
-function completion(tx) {
+function completion(tx, op) {
   return new Promise((resolve, reject) => {
     tx.oncomplete = resolve
-    tx.onerror = () => reject(tx.error)
+    tx.onerror = () => reject(rejection(op, tx.error))
   })
+}
+
+// Raw IDB/DOMException messages are generic ("The operation failed..."),
+// which leaves a UI nothing to show the user. Every rejection is wrapped in
+// an Error naming the operation ("put failed: ..."); the original error is
+// preserved on `cause` so callers can still classify it programmatically.
+function rejection(op, cause) {
+  return new Error(`${op} failed: ${cause?.message ?? 'unknown error'}`, { cause })
 }
 
 export function openStore(idbFactory = globalThis.indexedDB) {
@@ -56,19 +64,19 @@ function store(db) {
       const tx = db.transaction(['conversations', 'meta'], 'readwrite')
       tx.objectStore('conversations').put(conv)
       tx.objectStore('meta').put(meta)
-      return completion(tx)
+      return completion(tx, 'put')
     },
 
     // Missing fileName resolves undefined.
     get(fileName) {
       const tx = db.transaction(['conversations'], 'readonly')
-      return request(tx.objectStore('conversations').get(fileName))
+      return request(tx.objectStore('conversations').get(fileName), 'get')
     },
 
     // Home-screen metadata only — `meta` store never holds messages.
     list() {
       const tx = db.transaction(['meta'], 'readonly')
-      return request(tx.objectStore('meta').getAll())
+      return request(tx.objectStore('meta').getAll(), 'list')
     },
 
     // Removes the record and its projection together.
@@ -76,7 +84,7 @@ function store(db) {
       const tx = db.transaction(['conversations', 'meta'], 'readwrite')
       tx.objectStore('conversations').delete(fileName)
       tx.objectStore('meta').delete(fileName)
-      return completion(tx)
+      return completion(tx, 'delete')
     },
   }
 }
