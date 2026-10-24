@@ -7,12 +7,23 @@
 // throw under { fatal: true }, which is the detection signal.
 //
 // importFile returns 'imported' for a brand-new fileName and 'replaced' when
-// a prior record with that key existed; parse failures surface as
-// Error('no-messages') so the UI can show a plain, honest message.
+// a prior record with that key existed — wrapped as
+// { status, report } where report echoes the parsed file's matched/unmatched
+// line counts. parse failures surface as Error('no-messages') so the UI can
+// show a plain, honest message.
+//
+// Warn-and-store ruling (final review): a file with a LARGE SHARE of
+// non-matching lines is stored anyway (the good lines are worth keeping),
+// but the caller gets the report so the UI can toast a warning. The pin is
+// STRICT > at UNMATCHED_WARN_RATIO: a ratio of exactly 0.25 is NOT
+// warn-worthy, anything above it is (see tests/import.test.js).
 
 import { parseConversation } from './parse.js'
 
 const FALLBACK_ENCODING = 'windows-1256'
+
+// Warn threshold, read by the UI (js/ui/home.js) — never re-pinned there.
+export const UNMATCHED_WARN_RATIO = 0.25
 
 export function decodeText(buffer) {
   try {
@@ -39,7 +50,9 @@ function fileNameKey(name) {
 export async function importFile(store, fileObj) {
   const text = decodeText(fileObj.buffer)
   const parsed = parseConversation(text)
-  if (parsed.report.matched === 0) throw new Error('no-messages')
+  const report = parsed.report
+  const { matched, unmatched } = report
+  if (matched === 0) throw new Error('no-messages')
 
   const fileName = fileNameKey(fileObj.name)
   const messages = parsed.messages
@@ -55,5 +68,6 @@ export async function importFile(store, fileObj) {
 
   const prior = await store.get(fileName)
   await store.put(conv)
-  return prior ? 'replaced' : 'imported'
+  // Same flow regardless of the match share — warn-and-store, never discard.
+  return { status: prior ? 'replaced' : 'imported', report: { matched, unmatched } }
 }

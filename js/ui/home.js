@@ -5,7 +5,7 @@
 // Every error path is made visible here — store rejections carry a readable
 // message ("<op> failed: ..."), which is shown in the toast as-is.
 
-import { importFile } from '../import.js'
+import { importFile, UNMATCHED_WARN_RATIO } from '../import.js'
 import { requestPersistence } from '../store.js'
 import { openChat } from './chat.js'
 
@@ -119,8 +119,14 @@ export async function initHome(store) {
     for (const file of fileList) {
       try {
         const buffer = await file.arrayBuffer()
-        await importFile(store, { name: file.name, buffer })
+        const { report } = await importFile(store, { name: file.name, buffer })
         importedAny = true
+        // Warn-and-store (strict > at UNMATCHED_WARN_RATIO — see import.js):
+        // stored count is the trusted one; the warning is only a heads-up.
+        const { matched, unmatched } = report
+        if (unmatched / (matched + unmatched) > UNMATCHED_WARN_RATIO) {
+          toast(`Imported with warnings — some lines couldn't be read (${unmatched})`)
+        }
       } catch (err) {
         toast(err.message === 'no-messages' ? NO_MESSAGES_MESSAGE : err.message ?? String(err))
       }
