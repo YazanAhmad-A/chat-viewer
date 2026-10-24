@@ -1,0 +1,4 @@
+.superpowers/
+node_modules/
+*.txt
+!tests/fixtures/*
