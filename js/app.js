@@ -2,6 +2,10 @@
 import { openStore } from './store.js'
 import { initHome } from './ui/home.js'
 
+// Boot sentinel for index.html's inline file:// fallback: this line only
+// runs when the module bootstrap itself runs (i.e. we were served).
+window.__appBooted = true
+
 try {
   const store = await openStore()
   await initHome(store)

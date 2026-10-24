@@ -19,6 +19,10 @@
     <div id="toast" class="toast" role="alert" hidden></div>
     <footer id="home-note" class="home-note" hidden></footer>
     <input id="file-input" type="file" multiple accept=".txt" hidden>
+    <!-- BOOT NOTE (fix wave #1): revealed by the inline sentinel below when
+         the module bootstrap never ran (e.g. index.html opened via file://,
+         where module-script fetching rules block js/app.js). -->
+    <div id="boot-note" class="home-note" hidden></div>
   </section>
 
   <section id="chat" class="screen chat-screen" hidden>
@@ -60,5 +64,19 @@
   </section>
 
   <script type="module" src="js/app.js"></script>
+  <!-- file:// boot sentinel: a module script isn't fetched under file://,
+       so a double-clicked index.html would stay a dead skeleton. app.js sets
+       window.__appBooted as soon as it runs (module bootstrap only runs when
+       served); if the flag is missing 300ms later, say so plainly. -->
+  <script>
+    setTimeout(function () {
+      if (window.__appBooted) return
+      var note = document.getElementById('boot-note')
+      if (note) {
+        note.hidden = false
+        note.textContent = 'For full functionality open this page from a server: run `node scripts/serve.mjs` and open http://localhost:<port> — or use the hosted URL.'
+      }
+    }, 300)
+  </script>
 </body>
 </html>
