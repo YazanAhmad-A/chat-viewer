@@ -190,10 +190,13 @@ export async function initHome(store) {
 
   els.addBtn.addEventListener('click', () => els.fileInput.click())
   els.fileInput.addEventListener('change', async () => {
-    const files = els.fileInput.files
-    els.fileInput.value = ''
+    // Snapshot the FileList BEFORE resetting: input.files is live, and the
+    // empty-string value setter clears that same FileList, so a capture taken
+    // after the reset would always be empty (length 0 → no import).
+    const files = [...els.fileInput.files]
+    els.fileInput.value = '' // allows re-selecting the same file later
     if (files.length === 0) return
-    if (await importFiles([...files])) notePersistence()
+    if (await importFiles(files)) notePersistence()
   })
 
   await render()
