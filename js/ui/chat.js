@@ -8,6 +8,19 @@
 // corrections above the viewport's top edge (see runFrame) — nothing the
 // reader sees moves when first-seen rows prove taller or shorter than 64px.
 //
+// SCROLL RE-BASING (the 33.5M-px cap): a browser scroll container cannot be
+// taller than 33,554,428px — measured empirically (Edge headless, 60M-px
+// child clamps to sh=33554428). A 40MB chat estimated at 64px/message is
+// ~51M px, so with plain pads the last ~250k messages are unreachable. Fix:
+// the pads in the DOM are clamped to TOP/BOTTOM_LIMIT (14M each) while the
+// TRUE coordinates stay exact in JS. Every frame recomputes
+//   virtualTop  = truePadTop − min(truePadTop, TOP_LIMIT)   (px hidden above)
+// and rewrites the physical scrollTop so that
+//   absScroll   = virtualTop + physical scrollTop
+// keeps pointing at the same content row (see setScrollState). All scroll
+// math in this module (windowFor, anchor, jump, restore, rest position)
+// therefore runs on ABS scrollTop, never on the raw element scrollTop.
+//
 // Navigation contract (module-level mini-router, no routing lib):
 //   showChat() / showHome()  — flip the [hidden] attributes of #home / #chat.
 //   openChat(fileName, store, opts) -> Promise<{ close(), highlightMessage }>
@@ -31,6 +44,11 @@ const MAX_GROW_STEP = 64     // rows mounted incrementally per frame before a ha
 const HIGHLIGHT_MS = 2000    // orange ping duration
 const HIGHLIGHT_TOP = 0.3    // place the pinged bubble near the viewport's top third
 const RESTORE_TOLERANCE = 60 // px of drift we're willing to re-pin after the first settle
+// DOM pad caps, sized so padTop + pool + padBottom stays ≤ ~28M + a pool —
+// comfortably under Chromium's 33,554,428px container cap that an unbounded
+// pad sandwich would hit on huge chats (see the re-basing note above).
+const TOP_LIMIT = 14e6
+const BOTTOM_LIMIT = 14e6
 
 // DOM owned by this module (declared in index.html's #chat skeleton).
 const chatSection = document.getElementById('chat')
@@ -159,7 +177,10 @@ function releaseSession() {
   searchOverlay?.close()
   if (rafId !== 0) { cancelAnimationFrame(rafId); rafId = 0 }
   clearTimeout(s.highlightTimer)
-  scrollPositions.set(s.fileName, scrollEl.scrollTop)
+  // Rest position in ABS coordinates (virtualTop + physical) — see the
+  // re-basing note atop the module. The pre-rebasing format stored physical
+  // scrollTop with virtualTop always 0, so old values read back identically.
+  scrollPositions.set(s.fileName, scrollEl.scrollTop + s.virtualTop)
   heightCache.set(s.fileName, {
     count: s.conv.messages.length,
     last: s.conv.last,
@@ -204,20 +225,20 @@ function beginSession(fileName, conv, opts) {
     initialIndex,
     savedTop,
     startTop,
+    virtualTop: 0, // px of true content hidden above the container's top edge
     highlightTimer: 0,
     highlightedRow: null,
     afterFrame: null,
     detached: false,
   }
 
-  // First synchronous paint: mount the window at the rest position, set the
-  // pads, then pin the scroll — the screen never appears empty and a reopen
-  // lands in one shot (the rAF pass right after fixes the estimates).
+  // First synchronous paint: mount the window at the rest position, then set
+  // pads + virtualTop + scroll together (see setScrollState) — the screen
+  // never appears empty and a reopen lands in one shot (the rAF pass right
+  // after fixes the estimates).
   const win = windowFor({ lengths: heights, scrollTop: startTop, viewport: scrollEl.clientHeight })
   reconcile(s, win)
-  setPads(win)
-  scrollEl.offsetHeight // force layout so scrollTop clamps against the fresh pads
-  scrollEl.scrollTop = startTop
+  setScrollState(s, win, startTop)
   scheduleFrame()
   return s
 }
@@ -240,7 +261,12 @@ function jumpToMessage(i) {
   const s = session
   if (!s || s.detached) return
   s.jumped = true
-  scrollEl.scrollTop = Math.max(0, cumulative(s.lengths, i) - scrollEl.clientHeight * HIGHLIGHT_TOP)
+  // ABS scroll target; setScrollState derives virtualTop/physical for it so a
+  // jump into any depth (even past both pad caps) clamps nothing.
+  const abs = Math.max(0, cumulative(s.lengths, i) - scrollEl.clientHeight * HIGHLIGHT_TOP)
+  const win = windowFor({ lengths: s.lengths, scrollTop: abs, viewport: scrollEl.clientHeight })
+  reconcile(s, win)
+  setScrollState(s, win, abs)
   // After the scroll's own rAF frame (mount + measure), nudge onto the true
   // bubble position — estimates around the jump are corrected by then.
   s.afterFrame = () => nudgeToIndex(i)
@@ -255,7 +281,7 @@ function nudgeToIndex(i) {
     const want = scrollEl.clientHeight * HIGHLIGHT_TOP
     const have = row.getBoundingClientRect().top - scrollEl.getBoundingClientRect().top
     const delta = have - want
-    if (Math.abs(delta) > 1) scrollEl.scrollTop += delta // fires another scroll frame (pads shift accordingly)
+    if (Math.abs(delta) > 1) scrollEl.scrollTop += delta // fires another scroll frame; pads/abs re-sync there
   }
   outlineMessage(i)
 }
@@ -291,7 +317,9 @@ function runFrame() {
   const s = session
   if (!s || s.detached) return
   const viewport = scrollEl.clientHeight
-  let scrollTop = scrollEl.scrollTop
+  // ABS scroll position = px hidden above the container + physical scrollTop.
+  // This is the coordinate every pure-math consumer below gets.
+  let scrollTop = s.virtualTop + scrollEl.scrollTop
 
   // 1. Window under the height estimates as they stand, then reconcile DOM.
   let win = windowFor({ lengths: s.lengths, scrollTop, viewport })
@@ -324,18 +352,15 @@ function runFrame() {
       for (const u of updates) {
         if (u.itemIndex < anchor) shift += u.newHeight - previous[u.itemIndex]
       }
-      if (shift !== 0) {
-        scrollEl.scrollTop += shift
-        scrollTop = scrollEl.scrollTop // read back: the browser may clamp
-      }
+      scrollTop += shift // ABS: setScrollState re-derives virtual/physical below
     }
     win = windowFor({ lengths: s.lengths, scrollTop, viewport })
     reconcile(s, win)
   }
-  setPads(win)
+  setScrollState(s, win, scrollTop)
 
   // 4. One-time post-first-paint work: queued highlight, scroll re-pin.
-  if (!s.settled) settle(s)
+  if (!s.settled) settle(s, win)
 
   // 5. After-frame follow-up (highlight landing nudge).
   const followUp = s.afterFrame
@@ -345,7 +370,8 @@ function runFrame() {
 // After the first full render pass: honor a highlight queued before the chat
 // settled, otherwise re-pin the restored scroll if the first measured frame
 // shifted nearby content (only when the reader hasn't scrolled away).
-function settle(s) {
+// Comparisons and writes use ABS coordinates (win/virtualTop are in scope).
+function settle(s, win) {
   s.settled = true
   if (s.pendingHighlightIndex != null) {
     const i = s.pendingHighlightIndex
@@ -353,8 +379,9 @@ function settle(s) {
     jumpToMessage(i)
     return
   }
-  if (!s.jumped && s.savedTop > 0 && Math.abs(scrollEl.scrollTop - s.savedTop) <= RESTORE_TOLERANCE) {
-    scrollEl.scrollTop = s.savedTop
+  const absNow = s.virtualTop + scrollEl.scrollTop
+  if (!s.jumped && s.savedTop > 0 && Math.abs(absNow - s.savedTop) <= RESTORE_TOLERANCE) {
+    setScrollState(s, win, s.savedTop)
   }
 }
 
@@ -463,17 +490,38 @@ function anchorIndex(lengths, scrollTop) {
   return -1
 }
 
-// ---- Pads -------------------------------------------------------------------
+// ---- Scroll + pads ----------------------------------------------------------
 
-// padTop = sum of heights of items before [start), padBottom of items from
-// [end) on — so unmounting items at an edge while their height moves into
-// the pad happens in the same layout commit: the content below/above never
-// shifts. windowFor already computed both sums during its cum pass, so the
-// pads are read from the window result directly (no second O(n) scan of
-// lengths here — perf ruling #3).
-function setPads(win) {
-  padTopEl.style.height = win.padTop + 'px'
-  padBottomEl.style.height = win.padBottom + 'px'
+// The heart of scroll re-basing. `win` carries the TRUE pads (full sums over
+// lengths); `absTop` is where the viewport's top edge sits in true content
+// coordinates. Writes one coherent layout commit:
+//   padTopDom    = min(truePadTop, TOP_LIMIT)      pool start = win.start
+//   virtualTop   = truePadTop − padTopDom          (s.virtualTop, px hidden above)
+//   padBottomDom = min(truePadBottom, BOTTOM_LIMIT)
+//   phys         = absTop − virtualTop             (what the element scrollTop holds)
+// Keeping absTop = virtualTop + phys invariant is what wires the reader to the
+// same row: the pool's first row sits at true offset virtualTop + padTopDom ==
+// win.padTop, and the viewport top is absTop − virtualTop px below it.
+// The invariant also keeps phys ≈ padTopDom + (overscan above the pool) while
+// deep — far from 0 and, thanks to padBottomDom's own cap, far from the
+// element's max scroll — so the browser clamps nothing and the reader can
+// always keep scrolling in either direction, to the true top AND the true end.
+function setScrollState(s, win, absTop) {
+  const padTopDom = Math.min(win.padTop, TOP_LIMIT)
+  const padBottomDom = Math.min(win.padBottom, BOTTOM_LIMIT)
+  const virtualTop = win.padTop - padTopDom
+  s.virtualTop = virtualTop
+  padTopEl.style.height = padTopDom + 'px'
+  padBottomEl.style.height = padBottomDom + 'px'
+  // phys is within [0, padTopDom + pool + padBottomDom − viewport] by
+  // construction (win spans the viewport), but the writes land against the
+  // pad values above, so force layout first when the numbers actually move
+  // (steady reading frames leave scrollTop untouched — no reflow).
+  const phys = Math.max(0, absTop - virtualTop)
+  if (scrollEl.scrollTop !== phys) {
+    scrollEl.offsetHeight // fresh layout so the write clamps against THESE pads
+    scrollEl.scrollTop = phys
+  }
 }
 
 function cumulative(lengths, i) {
